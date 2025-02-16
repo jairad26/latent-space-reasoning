@@ -27,6 +27,7 @@ print("Logits shape:", logits.shape)  # Expected shape: (batch_size, seq_len, vo
 print("States shape:", states.shape)    # Expected shape: (batch_size, num_steps, seq_len, hidden_size)
 print("Lam vector shape:", lam_vector.shape)
 print("Attention weights shape:", attention_weights.shape)
+print(tokenizer.decode(logits[0].argmax(dim=-1)))
 
 # Use the model's generate method to produce additional tokens.
 # With our updated new_forward, generate will use the original forward.

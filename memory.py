@@ -126,7 +126,7 @@ class MemorySystem:
                 where={"step": step}
             )
         else:
-            results = states_collection.get()
+            results = states_collection.get(include=["embeddings", "documents", "metadatas"])
         
         return {
             "metadata": metadata,

@@ -6,6 +6,8 @@ import chromadb
 from memory import MemorySystem
 from typing import Optional
 import os
+from state_transfer import StateTransferModule
+
 def modify_model_for_intermediates(model):
     device = torch.device("mps" if torch.mps.is_available() else "cpu")
     model.lam = LearnedAttentionAggregator(model.config.hidden_size).to(device)
@@ -34,6 +36,10 @@ def modify_model_for_intermediates(model):
             theta=50000.0,  # Base from the paper
             condense_ratio=1
         ).to(input_ids.device)
+        
+        # Initialize state transfer module if needed
+        if not hasattr(self, 'state_transfer'):
+            self.state_transfer = StateTransferModule(self.config.hidden_size)
 
         # Apply prelude layers
         for i, block in enumerate(self.transformer.prelude):
@@ -43,14 +49,12 @@ def modify_model_for_intermediates(model):
                 
         # Apply learned attention aggregator
         lam_vector, attention_weights = self.lam(hidden_states)
-        
+        cached_states = None
         if memory:
             query_text, collection_name = memory.find_similar_query(lam_vector)
             if query_text:
                 cached_states = memory.get_cached_states(collection_name)
-                print(f"Found cached states for query: {query_text}")
-                print(f"Collection name: {collection_name}")
-                print(f"Cached states: {cached_states}")
+                print(f"Found similar computation pattern from: {query_text}")
 
         # Initialize random state with correct variance
         random_state = torch.randn(
@@ -68,10 +72,33 @@ def modify_model_for_intermediates(model):
         for step in range(num_steps):
             adapter_input = torch.cat([hidden_states, current_state], dim=-1)
             next_state = self.transformer.adapter(adapter_input)
-            for i, block in enumerate(self.transformer.core_block):
-                next_state = block(next_state, freqs_cis=freqs_cis, step_idx=step*len(self.transformer.core_block) + i)
-                if isinstance(next_state, tuple):
-                    next_state = next_state[0]
+
+
+            if cached_states:
+                cached_next_state, confidence = self.state_transfer.transfer_computation_pattern(
+                    next_state,  # Pass the adapter output
+                    cached_states,
+                    similarity_threshold=0.8
+                )
+                print(f"Transfer confidence: {confidence:.3f}")
+                
+                if confidence > 0.8:
+                    next_state = cached_next_state
+                    print("Using cached state computation")
+                else:
+                    # Only run through core blocks if we're not using cached state
+                    for i, block in enumerate(self.transformer.core_block):
+                        next_state = block(next_state, freqs_cis=freqs_cis, step_idx=step*len(self.transformer.core_block) + i)
+                        if isinstance(next_state, tuple):
+                            next_state = next_state[0]
+            else:
+                # No cached states, run normal computation
+                for i, block in enumerate(self.transformer.core_block):
+                    next_state = block(next_state, freqs_cis=freqs_cis, step_idx=step*len(self.transformer.core_block) + i)
+                    if isinstance(next_state, tuple):
+                        next_state = next_state[0]
+
+            
             current_state = next_state
             if return_intermediates:
                 all_states.append(current_state.detach().clone())
