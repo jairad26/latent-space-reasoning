@@ -9,10 +9,6 @@ import os
 def modify_model_for_intermediates(model):
     device = torch.device("mps" if torch.mps.is_available() else "cpu")
     model.lam = LearnedAttentionAggregator(model.config.hidden_size).to(device)
-    if os.path.exists("lam_state.pt"):
-        model.lam.load_state()
-    else:
-        model.lam.save_state()
     original_forward = model.forward
     
     def new_forward(self, input_ids, text: Optional[str] = None, num_steps=32, return_intermediates=False, use_cache=False, return_lam=False, memory: Optional[MemorySystem] = None, **kwargs):

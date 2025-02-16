@@ -15,7 +15,7 @@ model = modify_model_for_intermediates(model)
 # Initialize Chroma client
 client = chromadb.PersistentClient("./huginn_db")
 
-text = "The capital of Westphalia is"
+text = "2 plus 2 is"
 device = torch.device("mps" if torch.mps.is_available() else "cpu")
 model.eval()
 model.to(device)

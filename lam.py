@@ -7,19 +7,9 @@ from utils import precompute_freqs_cis
 class LearnedAttentionAggregator(nn.Module):
     def __init__(self, hidden_size):
         super().__init__()
+        # Use fixed initialization with a specific seed
+        torch.manual_seed(42)  # or any fixed seed
         self.query = nn.Parameter(torch.randn(hidden_size))
-    
-    def save_state(self, path="lam_state.pt"):
-        """Save the LAM's state to a file"""
-        torch.save(self.state_dict(), path)
-    
-    def load_state(self, path="lam_state.pt"):
-        """Load the LAM's state from a file"""
-        device = torch.device("mps" if torch.mps.is_available() else "cpu")
-        if torch.cuda.is_available():
-            self.load_state_dict(torch.load(path))
-        else:
-            self.load_state_dict(torch.load(path, map_location=device))
     
     def forward(self, x):
         # x: (batch_size, seq_len, hidden_size)
