@@ -171,3 +171,4 @@ cython_debug/
 .pypirc
 
 huginn_db/
+lam_state.pt

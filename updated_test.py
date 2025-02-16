@@ -2,7 +2,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from huginn_modified import modify_model_for_intermediates, analyze_intermediate_states
 import chromadb
-
+from memory import MemorySystem
 # Load and modify model
 model = AutoModelForCausalLM.from_pretrained(
     "tomg-group-umd/huginn-0125", 
@@ -21,7 +21,8 @@ model.eval()
 model.to(device)
 
 # Analyze states using the modified forward (with return_intermediates)
-logits, states, lam_vector, attention_weights = analyze_intermediate_states(client, model, tokenizer, text, num_steps=16)
+memory = MemorySystem(client)
+logits, states, lam_vector, attention_weights = analyze_intermediate_states(client, model, tokenizer, text, num_steps=16, memory=memory)
 print("Logits shape:", logits.shape)  # Expected shape: (batch_size, seq_len, vocab_size)
 print("States shape:", states.shape)    # Expected shape: (batch_size, num_steps, seq_len, hidden_size)
 print("Lam vector shape:", lam_vector.shape)
