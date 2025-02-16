@@ -1,21 +1,28 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, condense_ratio: int = 1):
-    """Precompute the frequency cache for RoPE."""
-    with torch.autocast("cuda", enabled=False):
-        inv_freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-        t = torch.arange(end, dtype=torch.float32, device=inv_freqs.device) / condense_ratio
-        freqs = torch.outer(t, inv_freqs).float()
-        return torch.stack([torch.cos(freqs)[None, :, None, :], torch.sin(freqs)[None, :, None, :]], dim=4)
+from lam import LearnedAttentionAggregator
+from utils import precompute_freqs_cis
+import chromadb
+from memory import MemorySystem
+from typing import Optional
 
 def modify_model_for_intermediates(model):
+    model.lam = LearnedAttentionAggregator(model.config.hidden_size)
     original_forward = model.forward
     
-    def new_forward(self, input_ids, num_steps=32, return_intermediates=False, use_cache=False, **kwargs):
+    def new_forward(self, input_ids, num_steps=32, return_intermediates=False, use_cache=False, return_lam=False, **kwargs):
+        # If caching is requested (as in generation), use the original forward method.
+        if use_cache:
+            # Remove our extra keyword arguments before calling the original forward.
+            kwargs.pop("num_steps", None)
+            kwargs.pop("return_intermediates", None)
+            kwargs.pop("return_lam", None)
+            return original_forward(input_ids, **kwargs)
+
+        # Otherwise, run our modified forward code.
         # Get the initial embeddings
         hidden_states = self.transformer.wte(input_ids)
-        
+
         # Generate RoPE cache
         batch_size, seq_len = input_ids.shape
         head_dim = self.config.hidden_size // self.config.num_attention_heads
@@ -25,73 +32,65 @@ def modify_model_for_intermediates(model):
             theta=50000.0,  # Base from the paper
             condense_ratio=1
         ).to(input_ids.device)
-        
-        # Apply prelude
+
+        # Apply prelude layers
         for i, block in enumerate(self.transformer.prelude):
             hidden_states = block(hidden_states, freqs_cis=freqs_cis, step_idx=i)
-
-            # Extract only the tensor (ignore None)
             if isinstance(hidden_states, tuple):
-                hidden_states = hidden_states[0] 
-            if isinstance(hidden_states, tuple):
-                print(f"Tuple contents: {[type(h) for h in hidden_states]}")
+                hidden_states = hidden_states[0]
+                
+        # Apply learned attention aggregator
+        lam_vector, attention_weights = self.lam(hidden_states)
 
-        
         # Initialize random state with correct variance
         random_state = torch.randn(
             batch_size, seq_len, self.config.hidden_size,
             device=input_ids.device
         ) * (2/5)**0.5
-        
+
         # Concatenate embeddings with state for adapter
         adapter_input = torch.cat([hidden_states, random_state], dim=-1)
         current_state = self.transformer.adapter(adapter_input)
-        
+
         all_states = [] if return_intermediates else None
-        
+
         # Run recurrent steps through core_block
         for step in range(num_steps):
-            # Concatenate current embeddings with state
             adapter_input = torch.cat([hidden_states, current_state], dim=-1)
             next_state = self.transformer.adapter(adapter_input)
-            
-            # Apply core blocks
             for i, block in enumerate(self.transformer.core_block):
                 next_state = block(next_state, freqs_cis=freqs_cis, step_idx=step*len(self.transformer.core_block) + i)
-                
-                # Extract only the tensor (ignore None)
                 if isinstance(next_state, tuple):
-                    next_state = next_state[0] 
-            
+                    next_state = next_state[0]
             current_state = next_state
-            
             if return_intermediates:
                 all_states.append(current_state.detach().clone())
-        
-        # Apply coda blocks
+
+        # Apply coda layers
         for i, block in enumerate(self.transformer.coda):
             current_state = block(current_state, freqs_cis=freqs_cis, step_idx=num_steps*len(self.transformer.core_block) + i)
-            
-            # Extract only the tensor (ignore None)
             if isinstance(current_state, tuple):
-                current_state = current_state[0] 
-            
-        # Final layer norm
+                current_state = current_state[0]
+
+        # Final layer norm and project to vocabulary
         current_state = self.transformer.ln_f(current_state)
-        
-        # Project to vocabulary
         logits = self.lm_head(current_state)
-        
-        if return_intermediates:
+
+        if return_intermediates and return_lam:
+            all_states = torch.stack(all_states, dim=1)
+            return logits, all_states, lam_vector, attention_weights
+        elif return_intermediates:
             all_states = torch.stack(all_states, dim=1)
             return logits, all_states
-        return logits
+        elif return_lam:
+            return logits, lam_vector, attention_weights
+        else:
+            return logits
 
-    # Replace the forward method
     model.forward = new_forward.__get__(model)
     return model
 
-def analyze_intermediate_states(model, tokenizer, text, num_steps=16):
+def analyze_intermediate_states(client, model, tokenizer, text, num_steps=16):
     # Set up device
     device = torch.device("mps" if torch.mps.is_available() else "cpu")
     model.to(device)
@@ -102,12 +101,14 @@ def analyze_intermediate_states(model, tokenizer, text, num_steps=16):
     
     # Run model with intermediate states
     with torch.no_grad():
-        logits, all_states = model(input_ids, num_steps=num_steps, return_intermediates=True)
+        logits, all_states, lam_vector, attention_weights = model(input_ids, num_steps=num_steps, return_intermediates=True, return_lam=True)
     
     # Print shapes and analysis
     print(f"Input shape: {input_ids.shape}")
     print(f"All states shape: {all_states.shape}")
     print(f"Final logits shape: {logits.shape}")
+    print(f"Lam vector shape: {lam_vector.shape}")
+    print(f"Attention weights shape: {attention_weights.shape}")
     
     # Analyze state changes
     for token_idx in range(input_ids.shape[1]):
@@ -120,7 +121,7 @@ def analyze_intermediate_states(model, tokenizer, text, num_steps=16):
         for step, change in enumerate(state_changes):
             print(f"Step {step+1} -> {step+2}: {change.item():.4f}")
     
-    return logits, all_states
+    return logits, all_states, lam_vector, attention_weights
 
 if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
