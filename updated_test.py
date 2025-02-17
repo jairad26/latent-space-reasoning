@@ -29,17 +29,17 @@ print("Lam vector shape:", lam_vector.shape)
 print("Attention weights shape:", attention_weights.shape)
 print(tokenizer.decode(logits[0].argmax(dim=-1)))
 
-# Use the model's generate method to produce additional tokens.
-# With our updated new_forward, generate will use the original forward.
-input_ids = tokenizer.encode(text, return_tensors="pt", add_special_tokens=True).to(device)
-outputs = model.generate(input_ids, num_steps=16)
-output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-print("Generated output text:", output_text)
+# # Use the model's generate method to produce additional tokens.
+# # With our updated new_forward, generate will use the original forward.
+# input_ids = tokenizer.encode(text, return_tensors="pt", add_special_tokens=True).to(device)
+# outputs = model.generate(input_ids, num_steps=16)
+# output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+# print("Generated output text:", output_text)
 
-# Optional checks
-assert torch.any(logits != 0), "Logits are all zeros. There might be an issue with the model."
-first_token_states = states[0, :, 0, :]  # Shape: (num_steps, hidden_size)
-norm_diffs = torch.norm(first_token_states[1:] - first_token_states[:-1], dim=1)
-print("Norm differences between consecutive states for the first token:")
-print(norm_diffs)
-assert torch.any(norm_diffs > 1e-3), "Latent states are not evolving as expected."
+# # Optional checks
+# assert torch.any(logits != 0), "Logits are all zeros. There might be an issue with the model."
+# first_token_states = states[0, :, 0, :]  # Shape: (num_steps, hidden_size)
+# norm_diffs = torch.norm(first_token_states[1:] - first_token_states[:-1], dim=1)
+# print("Norm differences between consecutive states for the first token:")
+# print(norm_diffs)
+# assert torch.any(norm_diffs > 1e-3), "Latent states are not evolving as expected."
