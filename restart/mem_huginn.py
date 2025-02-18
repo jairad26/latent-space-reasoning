@@ -96,8 +96,8 @@ def main():
     
     # Test prompts
     test_prompts = [
-        "What is the capital of France?",
-        "Explain quantum entanglement:",
+        # "What is the capital of France?",
+        # "Explain quantum entanglement:",
         "2+2=",
     ]
     
