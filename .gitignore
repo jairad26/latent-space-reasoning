@@ -172,4 +172,5 @@ cython_debug/
 
 huginn_db/
 lam_state.pt
+chroma_db/
 */chroma_db/
